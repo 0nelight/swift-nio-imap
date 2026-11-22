@@ -92,6 +92,31 @@ So the string reads "not downloaded", but the code path is "loaded, and empty". 
 `MESSAGE_PARTIALLY_DOWNLOADED` banner (`MFHasMoreContentBannerView`) is a different
 path and is not involved.
 
+## Device log (iOS 27.2.1)
+
+From a sysdiagnose taken on the affected device right after opening the message
+(`maild`, subsystem `com.apple.email`, category `MessageBodyLoader`; pointers and
+database IDs replaced):
+
+```
+21:49:12.702  copySummaryForMessage start (downloadIfNecessary YES): <MFLibraryMessage …> … received:2026-11-09 14:55:45 +0000 … remoteID:99911
+21:49:13.572  Error getting loading context event: NSError Domain=EMErrorDomain Code=2050
+21:49:13.572  copySummaryForMessage end (downloadIfNecessary YES), no body summary loaded: <MFLibraryMessage …> … remoteID:99911
+```
+
+The same start → error 2050 → "no body summary loaded" sequence repeats 14 times between
+21:49:12 and 21:50:20. Each time downloading is allowed, and each attempt ends within
+25–40 ms, without any request reaching the server (see the trace).
+
+`2050` is `0x802`. In `-[MFMessageLoadingContext _reallyLoad:shouldDownload:]` (23G83) that
+is the error code created in four places, one of them directly after the
+`Best alternative part … loaded empty document … Falling back to default alternative.`
+log line. The log alone does not identify which of the four fired. Together with the
+empty part and the absent fetch, it is consistent with the empty-document path above.
+
+The archive contains no `dsc/` shared-cache strings, so most `com.apple.email` lines,
+including the placeholder line, could not be resolved to text.
+
 ## Not fully resolved
 
 - Why the attachments disappear as well. On the MIME side, `decodeMultipart` would
