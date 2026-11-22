@@ -1,0 +1,23 @@
+From: Sender <sender@example.org>
+To: Recipient <recipient@example.org>
+Subject: Empty text/plain plus PDF attachment
+Date: Mon, 09 Nov 2026 15:55:07 +0100
+Message-ID: <repro-empty-text-part@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="------------repro0emptytext"
+
+This is a multi-part message in MIME format.
+--------------repro0emptytext
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+
+--------------repro0emptytext
+Content-Type: application/pdf; name="attachment.pdf"
+Content-Disposition: attachment; filename="attachment.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKMSAwIG9iajw8L1R5cGUvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+ZW5kb2JqCjIgMCBv
+Ymo8PC9UeXBlL1BhZ2VzL0tpZHNbMyAwIFJdL0NvdW50IDE+PmVuZG9iagozIDAgb2JqPDwvVHlw
+ZS9QYWdlL1BhcmVudCAyIDAgUi9NZWRpYUJveFswIDAgMjAwIDIwMF0+PmVuZG9iagp0cmFpbGVy
+PDwvUm9vdCAxIDAgUj4+CiUlRU9GCg==
+--------------repro0emptytext--

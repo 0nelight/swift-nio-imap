@@ -1,0 +1,17 @@
+Dovecot 2.4.5 rawlog (decrypted, before COMPRESS=DEFLATE), one session of iOS Mail
+after the user opened the message and tapped to load it. Attachment names and the
+boundary are replaced; everything else is verbatim. Timestamps are Unix seconds.
+
+C  1795378583.827502 X4 ID ("name" "com.apple.email.maild" "version" "3901.200.71.2.2" "os" "iOS" "os-version" "27.2.1 (24B156)" "vendor" "Apple Inc" "event" "user-initiated")
+C  1795378583.827502 X5 SELECT "INBOX" (CONDSTORE)
+S  1795378583.865321 X5 OK [READ-WRITE] Select completed (0.038 + 0.000 + 0.037 secs).
+C  1795378583.970577 X11 UID FETCH 99911 (UID RFC822.SIZE BODYSTRUCTURE)
+S  1795378583.970825 * 36338 FETCH (UID 99911 RFC822.SIZE 15703205 BODYSTRUCTURE (("text" "plain" ("charset" "UTF-8" "format" "flowed") NIL NIL "7bit" 0 0 NIL NIL NIL NIL)("application" "pdf" ("name" "a.pdf") NIL NIL "base64" 659660 NIL ("attachment" ("filename" "a.pdf")) NIL NIL)("application" "pdf" ("name" "b.pdf") NIL NIL "base64" 15038794 NIL ("attachment" ("filename" "b.pdf")) NIL NIL) "mixed" ("boundary" "BOUNDARY") NIL NIL NIL))
+S  1795378583.970937 X11 OK Fetch completed (0.001 + 0.000 secs).
+   ... UID SEARCH / SELECT of other mailboxes, no further FETCH for UID 99911 ...
+C  1795378587.409877 X359 SELECT "INBOX" (CONDSTORE)
+C  1795378589.190048 X386 IDLE
+
+Across all 8 sessions recorded for this message the client sent exactly
+UID FETCH 99911 (UID RFC822.SIZE BODYSTRUCTURE) and never BODY[...] / BINARY[...]
+for any of its sections.
