@@ -206,12 +206,48 @@ strands the message:
   mistake as the zero-length literal framing bug, one layer up, between the fetch planner
   and the section store.
 
-What the Ghidra read could **not** settle: the exact bytes the synchronous download
-returns (H1 vs H2), and whether `partsForHTMLBody` excludes the text part *because* its
-octet count is 0. `BodyStructure.partsForHTMLBody(missingParts:additional:)`
-(24B156 @ `0x1bb279abc`) is a thin wrapper around `FUN_1bb279e3c` → `FUN_1bb27a4b8`,
-which builds the `OrderedSet` of parts; the size-0 branch inside it was not isolated. It
-is only observed that the result is zero sections.
+**Where the 0-octet part is dropped (27.2.1, confirmed).** Read with the Swift tooling from
+`ghidra-swift` (`git@gcr-git:ghidra-swift.git`), on `Message` 24B156:
+
+1. *What counts as missing.* `checkWithoutCacheForMissingParts(uids:)` (`0x1badcdeec`)
+   builds a `MailboxPersistenceHelper.MissingMessageParts` per UID (`0x1badd8368`) from the
+   stored `PartStatus` (`known([Part: SparsePartInfo.Status])`, `full`, `allMissing`,
+   `inaccessible`). A body part is missing only if its `IMAP2MIME.SparsePartInfo.Status`
+   is `.empty(length:)` (predicate `0x1badd8ff0`), an attachment only if it is
+   `.emptyAttachment` (`0x1badd910c`). Type and case names from `ipsw swift-dump`.
+2. *Which parts the body needs.* `BodyStructure.partsForHTMLBody(missingParts:additional:)`
+   (`0x1bb279abc` → `0x1bb27a4b8`) picks the `text/*` parts (preferring `html` inside
+   `multipart/alternative`) and keeps those listed in, or under, the missing parts
+   (`Set.filter` `0x1bb27d0f8` with predicate `0x1bb27b60c`). It has no size check; for this
+   message it yields part `1`.
+3. *0-octet parts are removed from the request.* The section planner (`0x1badd9b84`, the
+   function that logs `Will request sections {%s}, plan: %{public}s, …`) does:
+
+   ```c
+   planned  = FUN_1baddce8c(...);          // partsForHTMLBody ∩ missing, + attachments per DownloadPlan
+   zero     = FUN_1bac91598(bodyStructure); // BodyStructure.enumerateParts: every single part
+                                            // whose fields.octetCount == 0  (0x1bac91648)
+   sections = planned.subtracting(zero);    // Set.subtracting @ 0x1badda4a8
+   ```
+
+   `FUN_1bac91648` skips multipart nodes and inserts a single part when the 8-byte field at
+   offset `0x48` of its `BodyStructure.Fields` is 0. In `Fields` (this package,
+   `Grammar/Body/Field/Fields.swift`) that is `octetCount` (`parameters` 0x18, `id`,
+   `contentDescription`, `encoding` 0x10 each, then `octetCount`); `fields` sits at `+8` in
+   `Singlepart` after `kind`. In the call at `0x1badda4a8`, `planned` is `self` (`x1`) and
+   the zero set is `other` (`x0`).
+
+So `{1} − {1} = {}`: with the default plan (attachments deferred), nothing is requested. That
+is deliberate — a 0-octet part needs no bytes — but nothing records it as present either:
+its status never becomes `.normal`, no sparse EMLX is written (that happens only when a
+section download completes), and the message keeps looking undownloaded. Every later load
+repeats the same plan, which is why the synchronous download finishes in milliseconds
+without a request. This is the `0` vs "empty" confusion: the planner treats a 0-octet part
+as already complete, the store treats it as not yet downloaded.
+
+Still open: the exact bytes the synchronous download returns in this state (H1 vs H2
+below), and the 24B156 equivalent of the zero-count branch in the 23G83 section enqueuer
+(what, if anything, it marks for a message with zero sections).
 
 **Distinguishing H1 from H2 on a device** (if a labelled build is available): append the
 repro twice, once with the text part at 0 bytes and once at 1 byte, and compare these
