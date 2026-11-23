@@ -59,34 +59,49 @@ if (requested == 0) {
 So the client decides locally that the body is fully loaded and empty, and it never
 sends `BODY[1]`, which matches the trace.
 
-**2. An empty best alternative is treated as an empty message.**
-`-[MFMessageLoadingContext _reallyLoad:shouldDownload:]` (Message, around `0x1b287d77c`)
-loads `bestAlternativeInPart:`. `__contentLoadedEmptyDocument` (`0x1b287ec3c`) returns
-true for a single `MFWebMessageDocument` with `resultOffset == 0`, which logs
+**2. The message view loads in default-alternative mode.**
+`-[MFMessageContentRequest requestHTMLRepresentationWithCompletionHandler:]` calls
+`-[MFMessageLoadingContext load:0 … shouldDownload:YES]` (Message @ `0x1b286f31c`).
+With mode `0`, `_reallyLoad:shouldDownload:` uses `defaultAlternativeInPart:` and skips
+its in-loop "best alternative loaded empty document" check (see the device log section).
 
-```
-Best alternative part %{public}@ loaded empty document for message %{public}@.
-Falling back to default alternative.
-```
-
-and if that is empty too, sets empty content with `hasLoadedCompleteBody = isComplete`
-(YES, from step 1).
-
-**3. Empty and complete → the "not downloaded" placeholder.**
-`-[MFMessageContentRequest _processContentLoadingContextEvent:]` (Message @
-`0x1b286f448`):
+**3. A single document with `resultOffset == 0` is replaced by empty content, without an error.**
+After the loop, `_reallyLoad:shouldDownload:` (Message @ `0x1b287d518`) calls
+`__contentLoadedEmptyDocument` (`0x1b287ec3c`):
 
 ```c
-if (!appendedAnyContent && event.error == nil &&
-    [event hasLoadedBestAlternativePart] && [event hasLoadedCompleteBody])
-    log("Did not find any content for message: %{public}@, using placeholder html");
+if (count == 1 && [first isKindOfClass:MFWebMessageDocument])
+    return resultOffset == 0 ? YES : [first isVisuallyEmpty];
+return NO;
 ```
 
-**4. The placeholder text.**
+`resultOffset` counts only text bytes, so a 0-octet text part makes this true no matter
+what the document contains. On true, the content is set to an empty constant,
+`hasLoadedSomeContent = YES`, no error is set, and `hasLoadedCompleteBody` is set from
+MIME's `isComplete` (YES, from step 1).
+
+**4. No content and no error → the placeholder.**
+`-[MFMessageContentRequest _processContentLoadingContextEvent:]` (Message @
+`0x1b286f448`). The "appended content" flag is set only by the HTML/string append block
+(`block_invoke_3` @ `0x1b2871388`, unconditionally, even for an empty string). Attachment
+items (block @ `0x1b28715cc`) never set it.
+
+```c
+if (!appendedAnyContent) {
+    if (event.error)                                         // 0x801 "Error loading content"
+        ...;
+    else if ([event hasLoadedBestAlternativePart] && [event hasLoadedCompleteBody])
+        log("Did not find any content for message: %{public}@, using placeholder html");
+}
+```
+
+**5. The placeholder text is `NO_BODY`.**
 `-[MessageContentRepresentationRequestDelegate contentObjectID:placeholderHTMLForEmptyContentWithCompletionHandler:]`
-(MobileMailUI @ `0x219505918`) loads a key from the MobileMail `Main.strings` and wraps
-it in `<i><font color=#888>…</font></i>`. The key is presumably `NO_BODY`, matching the
-text shown.
+(MobileMailUI @ `0x219505918`) calls `localizedStringForKey:@"NO_BODY" value:@"" table:@"Main"`
+(disassembly at `0x219505950`) and formats it with `_MFErrorPageMarkupFormat` =
+`<html dir=auto><body><i><font color=#888>%@</font></i></body></html>`. This is the only
+use of `NO_BODY` in MobileMailUI. The MobileMail app uses its own `NO_BODY` only for the
+mailbox-list preview.
 
 So the string reads "not downloaded", but the code path is "loaded, and empty". The
 `MESSAGE_PARTIALLY_DOWNLOADED` banner (`MFHasMoreContentBannerView`) is a different
@@ -109,19 +124,30 @@ The same start → error 2050 → "no body summary loaded" sequence repeats 14 t
 25–40 ms, without any request reaching the server (see the trace).
 
 `2050` is `0x802`. In `-[MFMessageLoadingContext _reallyLoad:shouldDownload:]` (23G83) that
-is the error code created in four places, one of them directly after the
-`Best alternative part … loaded empty document … Falling back to default alternative.`
-log line. The log alone does not identify which of the four fired. Together with the
-empty part and the absent fetch, it is consistent with the empty-document path above.
+error is created in four places. One of them sits in the loop's best-alternative mode
+(mode ≥ 1): on the second pass, if `__contentLoadedEmptyDocument` is true, it logs
+
+```
+Best alternative part %{public}@ loaded empty document for message %{public}@.
+Falling back to default alternative.
+```
+
+and sets `0x802`, which is never cleared. That fits the summary path here, if
+`copySummaryForMessage` loads in best-alternative mode (not verified). It does **not**
+produce the message-view placeholder: a request that carries an error takes the
+`0x801` "Error loading content" branch in step 4, not the placeholder. The placeholder
+comes from the post-loop branch in mode `0` (step 3), which sets no error.
 
 The archive contains no `dsc/` shared-cache strings, so most `com.apple.email` lines,
 including the placeholder line, could not be resolved to text.
 
 ## Not fully resolved
 
-- Why the attachments disappear as well. On the MIME side, `decodeMultipart` would
-  still emit attachment placeholders for `multipart/mixed`. The likely cause is that
-  the empty text part, rather than the container, is selected as the best alternative.
+- Why the attachments disappear as well. With the full tree, `decodeMultipart` (MIME)
+  returns `[WebDoc, MFAttachment, MFAttachment]`. That is three items, so step 3 would not
+  fire and the attachments would render. Step 3 needs exactly one `MFWebMessageDocument`,
+  so the part that is decoded cannot have attachment children: either the empty text
+  part itself is selected, or the stored MIME tree lacks the PDF parts.
   The Swift section planner on 27.2.1, `BodyStructure.partsForHTMLBody(missingParts:additional:)`
   (`Message` 24B156 @ `0x1bb279abc`), was not traced down to its size-0 branch. It is only
   observed that it requests zero sections.
