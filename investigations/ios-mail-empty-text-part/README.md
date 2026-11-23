@@ -166,8 +166,33 @@ including the placeholder line, could not be resolved to text.
   built from BODYSTRUCTURE. It is non-empty but contains no `--boundary`, so it
   collapses to a single text child, giving one visually empty `MFWebMessageDocument` →
   step 3 → `NO_BODY`, with no attachments. A device log should show the fault-level line
-  `Mime parsing: Couldn't find MIME boundary %@ in message…`. What writes that body data
-  when no section was fetched has not been found.
+  `Mime parsing: Couldn't find MIME boundary %@ in message…`.
+- Where that data comes from. After sync, only `headers.emlx` exists: the message
+  headers plus `X-Apple-Content-Length` (Message @ `0x1b27b0f2c`).
+  `-[MFMailMessageLibrary bodyDataForMessage:…]` (`0x1b27ca084`) looks for `full.emlx`,
+  then `partial.emlx`, then a database row. It never reads the body from `headers.emlx`.
+  With none of those present, `-[MFLibraryStore bodyDataForMessage:…]` (`0x1b27913b8`)
+  logs `#CacheLoads fetching body data from network` and calls
+  `-[MFSwiftIMAPMailboxTaskManager fetchDataForMessage:partial:]` (`0x1b298b9a8`):
+  `Starting synchronous download for message UID %u`. The result is split at the end of
+  the header, and both halves (header and body) replace what the parser sees. A nil
+  body would give `0x802`, so the result was non-nil. What the Swift download returns
+  when it plans zero sections was not decoded. There are two possibilities:
+  - **H1:** real headers with a non-empty body that lacks `--boundary` → one synthesized
+    `text/plain` child.
+  - **H2:** a header block without `Content-Type` (which defaults to `text/plain`) and an
+    empty body.
+
+  H1 is more likely, since H2 would require the Swift side to rebuild the headers.
+  Confirmed so far: the download completes within 25–40 ms without any request (see the
+  trace).
+
+**Distinguishing on a device:** append the repro twice, once with the text part at 0
+bytes and once at 1 byte. Then compare these lines in a sysdiagnose:
+- `Fetched body data of length %lu from full data of length %lu …`
+- `Couldn't find MIME boundary` (H1)
+- `Updating range to %@ for part %@` on the top part without a boundary line (H2)
+- `Will request sections {…}, plan: …` (the empty plan)
   The Swift section planner on 27.2.1, `BodyStructure.partsForHTMLBody(missingParts:additional:)`
   (`Message` 24B156 @ `0x1bb279abc`), was not traced down to its size-0 branch. It is only
   observed that it requests zero sections.
