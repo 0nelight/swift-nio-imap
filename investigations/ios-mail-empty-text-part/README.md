@@ -187,15 +187,39 @@ including the placeholder line, could not be resolved to text.
   Confirmed so far: the download completes within 25–40 ms without any request (see the
   trace).
 
-**Distinguishing on a device:** append the repro twice, once with the text part at 0
-bytes and once at 1 byte. Then compare these lines in a sysdiagnose:
+**The "complete when fetching, absent when stored" asymmetry (checked in Ghidra).**
+The 0-octet part is treated as two different things by two layers, and that is what
+strands the message:
+- *Nothing to fetch.* `_ensureBodyDataToOffset:…` (MIME @ `0x1d69a352c`) clamps the
+  requested length to 0 and returns empty data with `isComplete = YES`, without any
+  network (step 1). The section enqueue path in `IMAP2Persistence` has a matching
+  zero-count branch: `FUN_1b2d0b5e8` (23G83 @ `0x1b2d0b5e8`, the "Requested to download
+  %ld sections" / "Adding %ld sections for message" function) tests the section-set count
+  and, when it is 0, takes a branch that only inserts the message id into a set and adds
+  no per-section download records. So no section data is ever enqueued or stored for this
+  message.
+- *Treated as not-yet-downloaded.* No stored section means no `full.emlx` / `partial.emlx`
+  / DB row, so `bodyDataForMessage:` falls through to the synchronous-download fallback
+  above. In other words, a part that the fetch planner calls "complete" never produces
+  stored body data, and the store then calls the message "not downloaded". This matches
+  the original guess that the bug is a `0` vs empty/`""` confusion — the same class of
+  mistake as the zero-length literal framing bug, one layer up, between the fetch planner
+  and the section store.
+
+What the Ghidra read could **not** settle: the exact bytes the synchronous download
+returns (H1 vs H2), and whether `partsForHTMLBody` excludes the text part *because* its
+octet count is 0. `BodyStructure.partsForHTMLBody(missingParts:additional:)`
+(24B156 @ `0x1bb279abc`) is a thin wrapper around `FUN_1bb279e3c` → `FUN_1bb27a4b8`,
+which builds the `OrderedSet` of parts; the size-0 branch inside it was not isolated. It
+is only observed that the result is zero sections.
+
+**Distinguishing H1 from H2 on a device** (if a labelled build is available): append the
+repro twice, once with the text part at 0 bytes and once at 1 byte, and compare these
+lines in a sysdiagnose:
 - `Fetched body data of length %lu from full data of length %lu …`
 - `Couldn't find MIME boundary` (H1)
 - `Updating range to %@ for part %@` on the top part without a boundary line (H2)
 - `Will request sections {…}, plan: …` (the empty plan)
-  The Swift section planner on 27.2.1, `BodyStructure.partsForHTMLBody(missingParts:additional:)`
-  (`Message` 24B156 @ `0x1bb279abc`), was not traced down to its size-0 branch. It is only
-  observed that it requests zero sections.
 - The Objective-C side was decompiled from 23G83. The available 24B156 extract of
   `Message` lacks Objective-C stub fixups.
 
