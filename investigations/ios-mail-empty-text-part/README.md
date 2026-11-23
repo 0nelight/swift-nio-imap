@@ -143,11 +143,31 @@ including the placeholder line, could not be resolved to text.
 
 ## Not fully resolved
 
-- Why the attachments disappear as well. With the full tree, `decodeMultipart` (MIME)
-  returns `[WebDoc, MFAttachment, MFAttachment]`. That is three items, so step 3 would not
-  fire and the attachments would render. Step 3 needs exactly one `MFWebMessageDocument`,
-  so the part that is decoded cannot have attachment children: either the empty text
-  part itself is selected, or the stored MIME tree lacks the PDF parts.
+- Why the attachments disappear as well. What is established (23G83):
+  - The `multipart/mixed` container is what gets decoded, not the text child.
+    `-[MFMessageStore bestAlternativeForPart:]` (MIME @ `0x1d698f718`) descends only for
+    `multipart/alternative`; `defaultAlternativeForPart:` calls it, and only the Exchange
+    store overrides it.
+  - A full tree would show the PDFs. `isAttachment` (`0x1d69a1d24`) is YES for
+    `application/pdf`, and `decodeMultipart` (`0x1d69a7db4`) returns
+    `[WebDoc, MFAttachment, MFAttachment]`. That is three items, so step 3 cannot fire.
+  - A sparse EMLX would give the full tree. `IMAP2MIME.Message.makeSparse(messageHeaders:bodyStructure:lineEnding:)`
+    (Message @ `0x1b2eb0560`) writes `--boundary` plus part headers for every
+    BODYSTRUCTURE part. It, and "Filling out empty & missing section(s)" (`0x1b29d43a0`),
+    are reached only from the completion of a section download (`0x1b29d2d94`). Here no
+    section download runs: the text part needs no fetch, and the PDFs are deferred.
+  - The other parse outcomes are excluded. In `__parseHeaders` (MIME @ `0x1d69a5210`),
+    if `--boundary` is not found in the body data, no subparts are created. A non-empty
+    body then becomes one synthesized `text/plain` child. An empty body gives zero
+    children, which shows `CANNOT_DECODE_MULTIPART_MESSAGE` (an error document, not
+    `NO_BODY`). Missing body data gives `0x802`.
+
+  So by elimination (inferred): the body data that maild parses for this message is not
+  built from BODYSTRUCTURE. It is non-empty but contains no `--boundary`, so it
+  collapses to a single text child, giving one visually empty `MFWebMessageDocument` →
+  step 3 → `NO_BODY`, with no attachments. A device log should show the fault-level line
+  `Mime parsing: Couldn't find MIME boundary %@ in message…`. What writes that body data
+  when no section was fetched has not been found.
   The Swift section planner on 27.2.1, `BodyStructure.partsForHTMLBody(missingParts:additional:)`
   (`Message` 24B156 @ `0x1bb279abc`), was not traced down to its size-0 branch. It is only
   observed that it requests zero sections.
